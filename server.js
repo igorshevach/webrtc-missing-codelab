@@ -152,8 +152,11 @@ allocateRoom(config.servers,777).then((room)=> {
             // messages between different servers in the cluster to reach the other side.
             if (!handler) {
                 console.log('peer not found', data.id);
-                // TODO: the protocol needs some error handling here. This can be as
-                // simple as sending a 'bye' with an extra error element saying 'not-found'.
+                ws.send(JSON.stringify({
+                    type: 'bye',
+                    id: data.id,
+                }));
+                ws.close();
                 return;
             }
 
