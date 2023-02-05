@@ -76,6 +76,12 @@ allocateRoom(config.servers,777).then((room)=> {
         // Store the connection in our map of connections.
         const [publisher, subscriber] = await room.createClient(generateClientId());
         const id = publisher.id;
+        publisher.once('publish', answer=> ws.send(JSON.stringify({id: publisher.id, type: 'answer', sdp: answer})));
+        subscriber.on( 'offer', sdp=>ws.send(JSON.stringify({
+            id: subscriber.id,
+            type: 'offer',
+            sdp
+        })));
         console.log('connection assigned id ', id);
 
 
@@ -156,7 +162,6 @@ allocateRoom(config.servers,777).then((room)=> {
             } else if (data.type === 'offer') {
                 console.log((new Date()).toISOString(), "publishing ", data.id);
 
-                publisher.once('publish', answer=> ws.send(JSON.stringify({id: data.id, type: 'answer', sdp: answer})));
                 await publisher.publish(data.sdp);
 
                 clearTimeout(publishThrottleTimer);
@@ -174,16 +179,8 @@ allocateRoom(config.servers,777).then((room)=> {
                             console.log((new Date()).toISOString(), subscriber.id, " is subscribing to ", publisherIds);
 
                             // BL stuff should be done here (e.g. sending different pubs to different subs)
+                            await subscriber.beginSubscribe(publisherIds);
 
-                            const feeds = await subscriber.beginSubscribe(publisherIds);
-
-                            console.log((new Date()).toISOString(), "sending offer to ", subscriber.id);
-
-                            subscriber.connection.send(JSON.stringify({
-                                id: subscriber.id,
-                                type: 'offer',
-                                sdp: feeds.jsep.sdp
-                            }));
                         }));
                         resolve();
                     } catch(e) {

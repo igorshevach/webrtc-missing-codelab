@@ -336,6 +336,7 @@ class Sublisher extends VideoRoomHandle {
                     streams
                 });
             this.joined = verb === 'join';
+            this.emit('offer', ret.jsep.sdp);
             return ret;
         } else {
             throw new Error('no participant added');
