@@ -5,20 +5,24 @@
 .container {
     margin: 0 auto 0 auto;
     max-width: 60em;
-    display: grid;
+    #display: grid;
     grid-template-columns: repeat(2, 1fr);
     grid-gap: 10px;
 }
 
 .videocontainer {
     position: relative;
+    display: grid;
+    width: 100%;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    border: 2px solid blue;
 }
 
 .left {
     grid-column: 1/2;
 }
 .right{
-    grid-column: 2/2;
+    grid-column: 1/4;
 }
 
 .muted {
@@ -30,8 +34,9 @@
 }
 
 video {
-    height: 480px;
-    width: 640px;
+    height: 270px;
+    width: 302px;
+    float: top;
 }
 
 #localVideo {
@@ -39,6 +44,7 @@ video {
 }
 
 button {
+    display: none;
     background-color: rgb(58, 200, 143);
     border: none;
     border-radius: 2px;
@@ -48,7 +54,6 @@ button {
 }
 
 body {
-    background-image: url("https://bloggeek.me/wp-content/uploads/2020/02/bloggeekme.png");
     background-position: right bottom;
     background-repeat: no-repeat;
 }
@@ -56,22 +61,21 @@ body {
 </head>
 <body>
     <div class="container">
+        <p>Client ID: <span id="clientId"></span></p>
         <div class="videocontainer left">
             <video id="localVideo" autoplay muted playsinline></video>
         </div>
-        <div class="videocontainer right">
-            <video id="remoteVideo" autoplay playsinline></video>
-        </div>
+        <p>Peers (including myself)</p>
+        <div id="remoteVideoContainer" class="videocontainer right">
         <div class="left">
-            <p>Client ID: <span id="clientId"></span></p>
-            <p>
-                <button id="audioBtn">mute audio</button>
-                <button id="videoBtn">mute video</button>
-                <button id="shareBtn">share screen</button>
-            </p>
+                <p>
+                    <button id="audioBtn">mute audio</button>
+                    <button id="videoBtn">mute video</button>
+                    <button id="shareBtn">share screen</button>
+                </p>
         </div>
         <div class="right">
-            <p>Peer ID: <span id="peerId"></span></p>
+
             <p>
                 <button id="hangupButton" disabled>hangup</button>
             </p>
@@ -90,7 +94,7 @@ audioBtn.addEventListener('click', () => {
     audioTrack.enabled = !audioTrack.enabled;
 });
 const videoBtn = document.getElementById('videoBtn');
-videoBtn.addEventListener('click', () => {
+videoBtn.addEventListener('click',async () => {
     const videoTrack = localStream.getVideoTracks()[0];
     if (videoTrack.enabled) {
         videoBtn.classList.add('muted');
@@ -98,9 +102,11 @@ videoBtn.addEventListener('click', () => {
         videoBtn.classList.remove('muted');
     }
     videoTrack.enabled = !videoTrack.enabled;
-    // The advanced version of this stops the track to disable and uses
-    // replaceTrack to re-enable. Not necessary in Firefox which turns
-    // off the camera light.
+    if(videoTrack.enabled) {
+        localStream = await getUserMedia()
+    } else {
+        videoTrack.stop()
+    }
 });
 
 // Relatively self-contained screensharing/replaceTrack example.
@@ -114,23 +120,25 @@ function replaceVideoTrack(withTrack) {
     });
 }
 const shareBtn = document.getElementById('shareBtn');
+const localVideo = document.getElementById('localVideo');
+
 shareBtn.addEventListener('click', async () => {
     if (screenShare) { // click-to-end.
         screenShare.getTracks().forEach(t => t.stop());
         screenShare = null;
-        document.getElementById('localVideo').srcObject = localStream;
+        localVideo.srcObject = localStream;
         replaceVideoTrack(localStream.getVideoTracks()[0]);
         shareBtn.classList.remove('sharing');
         return;
     }
-    const stream = await navigator.mediaDevices.getDisplayMedia({video: true});
+    const stream = await navigator.mediaDevices.getDisplayMedia({video: {height:480}});
     const track = stream.getVideoTracks()[0];
     replaceVideoTrack(track);
-    document.getElementById('localVideo').srcObject = stream;
+    localVideo.srcObject = stream;
     track.addEventListener('ended', () => {
         console.log('Screensharing ended via the browser UI');
         screenShare = null;
-        document.getElementById('localVideo').srcObject = localStream;
+        localVideo.srcObject = localStream;
         replaceVideoTrack(localStream.getVideoTracks()[0]);
         shareBtn.classList.remove('sharing');
     });
@@ -155,10 +163,27 @@ let clientId; // our client id.
 let ws; // our websocket.
 let localStream; // local stream to be acquired from getUserMedia.
 let iceServers = null; // the latest iceServers we got from the signaling server.
-
+let bundlePolicy = 'max-bundle';
+const rtcpMuxPolicy = 'require';
+const videoHeight = 480;
+const maxVideoBitrateKbps = 800;
+const codecSelection = document.getElementById('codecSelection');
 async function getUserMedia() {
-    const stream = await navigator.mediaDevices.getUserMedia({audio: true, video: true});
-    document.getElementById('localVideo').srcObject = stream;
+
+    for(const codec of RTCRtpSender.getCapabilities('video').codecs){
+        const opt = document.createElement("option");
+        opt.text = codec.mimeType;
+        opt.value = JSON.stringify({
+            mimeType: codec.mimeType,
+            clockRate: codec.clockRate,
+            payloadType: 0
+        });
+        console.log("codec:", codec);
+        //codecSelection.options.add(opt);
+    }
+    const stream = await navigator.mediaDevices.getUserMedia({audio: true, video: {height:videoHeight}});
+    localVideo.srcObject = stream;
+
     return stream;
 }
 
@@ -196,7 +221,7 @@ function connect() {
                 break;
             case 'iceServers':
                 iceServers = data.iceServers;
-                resolve(); // resolve the promise only now so we always have an ice server configuration
+                resolve(clientId); // resolve the promise only now so we always have an ice server configuration
                 break;
             case 'bye':
                 if (peers.has(data.id)) {
@@ -207,37 +232,36 @@ function connect() {
                 }
                 break;
             case 'offer':
-                if (!peers.has(data.id)) {
-                    console.log('Incoming call from', data.id);
-                    document.getElementById('peerId').innerText = data.id;
-                    if (peers.size >= 1) { // Already in a call. Reject.
-                        console.log('Already in a call, rejecting');
-                        ws.send(JSON.stringify({
-                            type: 'bye',
-                            id: data.id,
-                        }));
-                        return;
-                    }
-                    // Create a new peer.
-                    const pc = createPeerConnection(data.id);
-                    if (localStream) {
-                        localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
-                    }
-                    await pc.setRemoteDescription({
-                        type: data.type,
-                        sdp: data.sdp
+                console.log('Incoming call from', data.id);
+                const pc = peers.get(data.id) || createPeerConnection(data.id);
+                if (localStream && !data.id.endsWith('-sub')) {
+                    const p = localStream.getTracks().map(async (t) => {
+                        const sender = pc.addTrack(t, localStream);
+                        if(false && t.kind === 'video'){
+                            await adjustEncVideoConstraints(sender);
+                        }
                     });
-                    const answer = await pc.createAnswer();
-                    await pc.setLocalDescription(answer);
-                    ws.send(JSON.stringify({
-                        type: 'answer',
-                        sdp: answer.sdp,
-                        id: data.id,
-                    }));
-                    hangupBtn.disabled = false;
-                } else {
-                    console.log('Subsequent offer not implemented');
+                    await Promise.all(p);
                 }
+                await pc.setRemoteDescription({
+                    type: data.type,
+                    sdp: data.sdp
+                });
+
+                const answer = await pc.createAnswer();
+                await pc.setLocalDescription({
+                    type: 'answer',
+                    sdp: answer.sdp,
+                });
+
+                ws.send(JSON.stringify({
+                    type: 'answer',
+                    sdp: answer.sdp,
+                    id: data.id
+                }));
+
+                hangupBtn.disabled = false;
+
                 break;
             case 'answer':
                 if (peers.has(data.id)) {
@@ -267,10 +291,12 @@ function connect() {
     });
 }
 
+const videoContainer = document.getElementById("remoteVideoContainer");
+
 // Helper function to create a peerconnection and set up a couple of useful
 // event listeners.
 function createPeerConnection(id) {
-    const pc = new RTCPeerConnection({iceServers});
+    const pc = new RTCPeerConnection({bundlePolicy,rtcpMuxPolicy});
     pc.addEventListener('icecandidate', (e) => {
         const {candidate} = e;
         /*
@@ -297,13 +323,27 @@ function createPeerConnection(id) {
             id,
         }));
     });
-    pc.addEventListener('track', (e) => {
-        const remoteVideo = document.getElementById('remoteVideo');
-        remoteVideo.onloadedmetadata = () => {
-            // called when the first frame is rendered.
-            console.log(id, 'loaded metadata');
-        };
-        remoteVideo.srcObject = e.streams[0];
+
+    pc.addEventListener('track', async (e) => {
+        console.log("adding track ", e.track);
+        let remoteVideo = videoContainer.getElementsByTagName(e.track.label);
+
+        if(!remoteVideo.length) {
+            remoteVideo = localVideo.cloneNode();
+            remoteVideo.tag = e.track.label;
+            if(e.track.kind === 'video')
+                videoContainer.prepend(remoteVideo);
+            remoteVideo.srcObject = new MediaStream();
+            remoteVideo.onloadedmetadata = () => {
+                // called when the first frame is rendered.
+                console.log(id, 'loaded metadata');
+            };
+        } else {
+            remoteVideo = remoteVideo[0];
+        }
+        remoteVideo.srcObject.addTrack(e.track);
+        remoteVideo.title = e.track.label;
+
     });
     pc.addEventListener('iceconnectionstatechange', () => {
         console.log(id, 'iceconnectionstatechange', pc.iceConnectionState);
@@ -313,10 +353,15 @@ function createPeerConnection(id) {
         if (pc.connectionState === 'connected') {
             hangupBtn.disabled = false;
             pc.getStats().then(onConnectionStats);
+        } else if(pc.connectionState === 'disconnected') {
+             for( const video of videoContainer.getElementsByClassName('video')) {
+                  videoContainer.removeChild(video);
+             }
         }
     });
     pc.addEventListener('signalingstatechange', () => {
         console.log(id, 'signalingstatechange', pc.signalingState);
+
     });
 
     let lastResult = null; // the last getStats result.
@@ -356,7 +401,7 @@ function onConnectionStats(results) {
   if (remoteCandidate) {
     // Statistics are a bit of a mess still...
     console.log('Remote is',
-        remoteCandidate.address || remoteCandidate.ip || remoteCandidate.ipAddress,
+        remoteCandidate.address || remoteCandidate.ip || remoteCandidate.ipAddress || remoteCandidate,
         remoteCandidate.port || remoteCandidate.portNumber);
   }
 }
@@ -392,7 +437,20 @@ async function queryBitrateStats(pc, lastResult) {
     });
     return stats;
 }
+async function adjustEncVideoConstraints(sender){
 
+    try {
+        const encParams = sender.getParameters();
+        encParams.encodings = encParams.encodings || [{}];
+        if (!encParams.encodings.length)
+            encParams.encodings.push({});
+        encParams.encodings[0].maxBitrate = maxVideoBitrateKbps;
+        encParams.codecs = [JSON.parse(codecSelection.options[codecSelection.selectedIndex || 0].value)];
+        await sender.setParameters(encParams);
+    } catch(e) {
+        console.log("error ",e);
+    }
+}
 // Call a peer based on its id. Adds any tracks from the local stream.
 async function call(id) {
     if (peers.has(id)) {
@@ -408,10 +466,9 @@ async function call(id) {
     ws.send(JSON.stringify({
         type: 'offer',
         sdp: offer.sdp,
-        id,
+        id: clientId,
     }));
     hangupBtn.disabled = false;
-    document.getElementById('peerId').innerText = id;
 }
 
 // Send a signal to the peer that the call has ended and close the connection.
@@ -430,20 +487,14 @@ function hangup(id) {
     }));
 }
 
-// Autoconnect when given a peer id, i.e. #someid
-const initialHash = window.location.hash.substr(1);
-
 // Get the camera, then connect to signaling. Makes things simple.
 getUserMedia()
-  .then((stream) => {
+  .then(async (stream) => {
     localStream = stream;
-    return connect();
+    const id = await connect();
+    await call(id)
 })
-.then(() => {
-    if (initialHash.length) {
-        call(initialHash);
-    }
-});
+
 
 window.addEventListener('beforeunload', () => {
     if (ws && ws.readyState === WebSocket.OPEN) {
